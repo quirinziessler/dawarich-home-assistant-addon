@@ -4,7 +4,7 @@
 
 [![HA App][ha-app-badge]][ha-app-link]
 
-[![Add App Repository to My Home Assistant](https://my.home-assistant.io/badges/supervisor_add_addon_repository.svg)](https://my.home-assistant.io/redirect/supervisor_add_addon_repository/?repository_url=https://github.com/thomdev-j/dawarich-home-assistant-addon)
+[![Add App Repository to My Home Assistant](https://my.home-assistant.io/badges/supervisor_add_addon_repository.svg)](https://my.home-assistant.io/redirect/supervisor_add_addon_repository/?repository_url=https://github.com/quirinziessler/dawarich-home-assistant-addon)
 
 ![Dawarich running inside Home Assistant](images/screenshot.jpg)
 
@@ -27,15 +27,8 @@
 Use the **Add App Repository** badge at the top of this page, or add the URL to your Home Assistant app store by hand:
 
 ```
-https://github.com/thomdev-j/dawarich-home-assistant-addon
+https://github.com/quirinziessler/dawarich-home-assistant-addon
 ```
-
-> **Already installed?** Nothing to do. This repository was renamed from
-> `homeassistant-app-dawarich`, and GitHub redirects the old address, so Home
-> Assistant keeps updating your existing install by itself. Do **not** remove
-> and re-add the repository under the new URL: Home Assistant identifies an app
-> store by a hash of the URL you added, so re-adding creates a second, empty
-> install instead of finding your data.
 
 **Settings** → **Apps** → **+ Install App** → **Repositories** → paste the URL → **Add**
 
@@ -216,7 +209,7 @@ This app builds on top of the [Dawarich](https://github.com/Freika/dawarich) Doc
 
 - [Dawarich](https://github.com/Freika/dawarich) — upstream project
 - [Dawarich Documentation](https://dawarich.app/) — full feature documentation
-- [Report an issue](https://github.com/thomdev-j/dawarich-home-assistant-addon/issues)
+- [Report an issue](https://github.com/quirinziessler/dawarich-home-assistant-addon/issues)
 
 [ha-app-badge]: https://img.shields.io/badge/Home%20Assistant-App-blue?logo=homeassistant
-[ha-app-link]: https://github.com/thomdev-j/dawarich-home-assistant-addon
+[ha-app-link]: https://github.com/quirinziessler/dawarich-home-assistant-addon
