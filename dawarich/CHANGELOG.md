@@ -1,5 +1,19 @@
 # Changelog
 
+## 1.22.0-1
+
+- Upgrade base image to Dawarich [1.22.0](https://github.com/Freika/dawarich/releases/tag/1.22.0)
+- Upstream releases rolled up: 1.16.0, 1.17.0, 1.18.0, 1.18.1, 1.19.0, 1.20.0, 1.20.1, 1.21.0, 1.22.0
+- **Highlights from Dawarich 1.16 to 1.22:**
+  - Rails 8.1 upgrade with security fixes
+  - Midnight track splitting option and local time display in Timeline for destinations in different time zones
+  - Smart stop detection (visits end tracks cleanly) and improved GPS noise filtering (suppresses erratic cell tower jumps)
+  - Poster Studio improvements, AirTrail flight tracks, and enhanced family sharing
+  - Streamlined data migrations and automatic raw data archival encryption key support
+- Automatic static asset synchronization from image for fast startups
+- Dedicated Sidekiq process isolation with database migration sequencing
+- Automated GitHub Actions release pipeline for immediate upstream version updates
+
 ## 1.15.3-2
 
 - Fix the map disappearing in the Home Assistant sidebar: the new vendored MapLibre module's importmap URL missed the ingress prefix, so browsers requested it from Home Assistant and refused its response as JavaScript

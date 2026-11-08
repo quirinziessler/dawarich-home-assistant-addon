@@ -17,6 +17,7 @@ for kv in \
   "RAILS_ENV=production" \
   "SELF_HOSTED=true" \
   "STORE_GEODATA=true" \
+  "SIDEKIQ_EMBEDDED=false" \
   "APPLICATION_PROTOCOL=http" \
   "RAILS_LOG_TO_STDOUT=true"; do
   key="${kv%%=*}"
@@ -179,6 +180,7 @@ if [ -f /data/dawarich/secret_key_base ]; then
 else
   openssl rand -hex 64 | tee /data/dawarich/secret_key_base > /var/run/s6/container_environment/SECRET_KEY_BASE
 fi
+cat /var/run/s6/container_environment/SECRET_KEY_BASE > /var/run/s6/container_environment/ARCHIVE_ENCRYPTION_KEY
 
 # --- PostgreSQL init on first run ---
 # A missing cluster means either a first install or a restored backup (HA backups

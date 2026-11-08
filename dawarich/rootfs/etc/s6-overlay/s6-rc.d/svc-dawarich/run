@@ -102,6 +102,12 @@ if ! bundle exec rails db:migrate 2>&1; then
   exit 1
 fi
 
+# Run data migrations
+bundle exec rake data:migrate 2>&1 || true
+
+# Seed database if needed
+bundle exec rails db:seed 2>&1 || true
+
 # Release Sidekiq. Everything below this point is application-level work that a
 # background job can safely run alongside.
 touch "$DB_READY_MARKER"
@@ -220,8 +226,13 @@ if [ -n "$HA_TRACKED_ENTITIES" ]; then
   echo "HA Multi-User: API key setup complete ($(ls /data/dawarich/api_keys/ | wc -l) entities)"
 fi
 
-# Precompile assets if needed
-if [ ! -f /data/dawarich/.assets_precompiled ] || [ "$DAWARICH_VERSION_CHANGED" = "true" ]; then
+# Sync precompiled static assets from image, or precompile as fallback
+if [ -d /var/app/public_dist ]; then
+  echo "Syncing static assets from public_dist..."
+  rm -rf /var/app/public/assets
+  cp -r /var/app/public_dist/* /var/app/public/
+elif [ ! -f /data/dawarich/.assets_precompiled ] || [ "$DAWARICH_VERSION_CHANGED" = "true" ]; then
+  echo "Precompiling assets..."
   bundle exec rails assets:precompile 2>&1
   touch /data/dawarich/.assets_precompiled
 fi

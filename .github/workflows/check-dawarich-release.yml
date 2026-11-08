@@ -1,20 +1,20 @@
-name: Check for new Dawarich release
+name: Check and auto-update Dawarich release
 
 on:
-  # No longer on a schedule: a Claude routine checks for new upstream releases
-  # daily at 16:00 Europe/Vienna and opens the bump PR itself, with an actual
-  # read of the upstream diff rather than a keyword scan of the release notes.
-  # Kept runnable by hand as a fallback if that routine is paused or broken.
-  workflow_dispatch: # allow manual trigger
+  schedule:
+    - cron: "0 */6 * * *" # Run every 6 hours
+  workflow_dispatch: # Allow manual trigger
 
 jobs:
-  check-release:
+  check-and-update:
     runs-on: ubuntu-latest
     permissions:
       contents: write
       pull-requests: write
     steps:
       - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
 
       - name: Get current and latest versions
         id: versions
@@ -77,7 +77,7 @@ jobs:
 
       # ── Collect release notes (all versions between current and latest) ──
       - name: Collect release notes
-        if: steps.versions.outputs.current != steps.versions.outputs.latest
+        if: steps.versions.outputs.current != steps.versions.outputs.latest && steps.docker.outputs.missing == ''
         id: release
         env:
           CURRENT: ${{ steps.versions.outputs.current }}
@@ -85,11 +85,6 @@ jobs:
           echo "Fetching all releases between ${CURRENT} and latest..."
           RELEASES=$(curl -sf "https://api.github.com/repos/Freika/dawarich/releases?per_page=50")
 
-          # Everything released since the version we currently package, newest
-          # first: walk the list from the newest and stop at the current tag.
-          # Derived once, because a second walk that filtered $current out
-          # before looking for it never stopped, and reported the whole release
-          # history as the jump size (35 versions for 1.12.1 to 1.12.2).
           NEWER=$(echo "$RELEASES" | jq --arg current "$CURRENT" '
             [ .[] | select(.prerelease == false and .draft == false) ]
             | sort_by(.published_at) | reverse
@@ -120,148 +115,9 @@ jobs:
           echo "$NOTES" >> "$GITHUB_OUTPUT"
           echo "$EOF" >> "$GITHUB_OUTPUT"
 
-      # ── Detect new upstream env vars not set by our init script ──
-      - name: Check for new environment variables
-        if: steps.versions.outputs.current != steps.versions.outputs.latest
-        id: envcheck
-        env:
-          LATEST: ${{ steps.versions.outputs.latest }}
-        run: |
-          echo "Comparing upstream env vars against addon init script..."
-          echo ""
-
-          # Fetch upstream docker-compose.yml from the release tag
-          COMPOSE=$(curl -sf "https://raw.githubusercontent.com/Freika/dawarich/${LATEST}/docker/docker-compose.yml" || true)
-
-          if [ -z "$COMPOSE" ]; then
-            echo "  ⚠️  Could not fetch upstream docker-compose.yml — skipping env var check"
-            echo "report=Could not fetch upstream docker-compose.yml" >> "$GITHUB_OUTPUT"
-            echo "has_new=false" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-
-          # Extract env var names from upstream compose (dawarich_app service environment block)
-          UPSTREAM_VARS=$(echo "$COMPOSE" \
-            | grep -oP '^\s+-\s+\K[A-Z_]+(?==)' \
-            | sort -u)
-
-          UPSTREAM_COUNT=$(echo "$UPSTREAM_VARS" | wc -l)
-          echo "  Upstream env vars found: ${UPSTREAM_COUNT}"
-
-          # Extract env var names our init script sets (written to s6 container_environment)
-          OUR_VARS=$(grep -oP 'container_environment/\K[A-Z_]+' \
-            dawarich/rootfs/etc/s6-overlay/scripts/init-dawarich.sh \
-            | sort -u)
-
-          # Also add vars set as hardcoded key=value pairs in the init script
-          HARDCODED=$(grep -oP '"[A-Z_]+=.*?"' \
-            dawarich/rootfs/etc/s6-overlay/scripts/init-dawarich.sh \
-            | grep -oP '[A-Z_]+(?==)' \
-            | sort -u)
-
-          ALL_OURS=$(printf '%s\n%s' "$OUR_VARS" "$HARDCODED" | sort -u)
-          OUR_COUNT=$(echo "$ALL_OURS" | wc -l)
-          echo "  Addon env vars found:    ${OUR_COUNT}"
-
-          # Vars upstream sets that we don't
-          NEW_VARS=$(comm -23 <(echo "$UPSTREAM_VARS") <(echo "$ALL_OURS") || true)
-
-          # Filter out vars that are only relevant for standalone Docker Compose
-          IGNORE_PATTERN="^(POSTGRES_USER|POSTGRES_PASSWORD|POSTGRES_DB|PROMETHEUS_|METRICS_|LOG_MAX_|APP_CPU_|APP_MEMORY_|SENTRY_|MANAGER_URL|DAWARICH_APP_PORT|GITHUB_OAUTH|GOOGLE_OAUTH)"
-          RELEVANT_NEW=$(echo "$NEW_VARS" | grep -vE "$IGNORE_PATTERN" || true)
-          RELEVANT_NEW=$(echo "$RELEVANT_NEW" | sed '/^$/d')
-
-          echo ""
-          if [ -n "$RELEVANT_NEW" ]; then
-            REPORT="**New upstream env vars not set by this addon:**"$'\n'
-            echo "  ⚠️  New env vars detected:"
-            while IFS= read -r var; do
-              [ -z "$var" ] && continue
-              DEFAULT=$(echo "$COMPOSE" | grep -oP "${var}=\K.*" | head -1)
-              echo "     - ${var} (default: ${DEFAULT:-unset})"
-              REPORT+="- \`${var}\` (default: \`${DEFAULT:-unset}\`)"$'\n'
-            done <<< "$RELEVANT_NEW"
-            echo "has_new=true" >> "$GITHUB_OUTPUT"
-          else
-            REPORT="All upstream env vars are covered by the addon."
-            echo "  ✅ All upstream env vars are already handled by the addon"
-            echo "has_new=false" >> "$GITHUB_OUTPUT"
-          fi
-
-          EOF=$(dd if=/dev/urandom bs=15 count=1 status=none | base64)
-          echo "report<<$EOF" >> "$GITHUB_OUTPUT"
-          echo "$REPORT" >> "$GITHUB_OUTPUT"
-          echo "$EOF" >> "$GITHUB_OUTPUT"
-
-      # ── Scan release notes for breaking changes ──
-      - name: Detect breaking changes
-        if: steps.versions.outputs.current != steps.versions.outputs.latest
-        id: breaking
-        env:
-          NOTES: ${{ steps.release.outputs.notes }}
-        run: |
-          echo "Scanning release notes for breaking change indicators..."
-          echo ""
-
-          HITS=$(echo "$NOTES" | grep -inE '(break|removed|deprecated|migration required|incompatible|renamed|dropped)' || true)
-          if [ -n "$HITS" ]; then
-            echo "  ⚠️  Potential breaking changes found:"
-            echo "$HITS" | while IFS= read -r line; do
-              echo "     $line"
-            done
-            echo "found=true" >> "$GITHUB_OUTPUT"
-            EOF=$(dd if=/dev/urandom bs=15 count=1 status=none | base64)
-            echo "lines<<$EOF" >> "$GITHUB_OUTPUT"
-            echo "$HITS" >> "$GITHUB_OUTPUT"
-            echo "$EOF" >> "$GITHUB_OUTPUT"
-          else
-            echo "  ✅ No breaking change indicators found"
-            echo "found=false" >> "$GITHUB_OUTPUT"
-          fi
-
-      # ── Print summary before making changes ──
-      - name: Compatibility summary
-        if: steps.versions.outputs.current != steps.versions.outputs.latest
-        env:
-          DOCKER_MISSING: ${{ steps.docker.outputs.missing }}
-          HAS_NEW_VARS: ${{ steps.envcheck.outputs.has_new }}
-          BREAKING_FOUND: ${{ steps.breaking.outputs.found }}
-          RELEASE_COUNT: ${{ steps.release.outputs.count }}
-          CURRENT: ${{ steps.versions.outputs.current }}
-          LATEST: ${{ steps.versions.outputs.latest }}
-        run: |
-          echo ""
-          echo "╔══════════════════════════════════════╗"
-          echo "║  Compatibility Report                ║"
-          echo "╠══════════════════════════════════════╣"
-          echo "║  Upgrade:       $CURRENT → $LATEST ($RELEASE_COUNT version(s))"
-          if [ -n "$DOCKER_MISSING" ]; then
-            echo "║  Docker image:  ❌ Missing:$DOCKER_MISSING"
-          else
-            echo "║  Docker image:  ✅ Both architectures available"
-          fi
-          if [ "$BREAKING_FOUND" = "true" ]; then
-            echo "║  Breaking:      ⚠️  Potential issues detected"
-          else
-            echo "║  Breaking:      ✅ None detected"
-          fi
-          if [ "$HAS_NEW_VARS" = "true" ]; then
-            echo "║  Env vars:      ⚠️  New vars found (review needed)"
-          else
-            echo "║  Env vars:      ✅ All covered"
-          fi
-          echo "╚══════════════════════════════════════╝"
-          echo ""
-
-          if [ -n "$DOCKER_MISSING" ] || [ "$BREAKING_FOUND" = "true" ] || [ "$HAS_NEW_VARS" = "true" ]; then
-            echo "→ PR will be labeled 'needs-review' for manual inspection"
-          else
-            echo "→ Clean upgrade — PR is safe to merge"
-          fi
-
       # ── Update version files ──
       - name: Update version files
-        if: steps.versions.outputs.current != steps.versions.outputs.latest
+        if: steps.versions.outputs.current != steps.versions.outputs.latest && steps.docker.outputs.missing == ''
         env:
           CURRENT: ${{ steps.versions.outputs.current }}
           LATEST: ${{ steps.versions.outputs.latest }}
@@ -279,7 +135,7 @@ jobs:
           echo "  ✓ config.yaml → ${NEW_VERSION}"
 
           # CHANGELOG.md — prepend new entry
-          CHANGELOG_ENTRY="## ${NEW_VERSION}\n\n- Upgrade base image to Dawarich ${LATEST}\n- See [release notes](https://github.com/Freika/dawarich/releases/tag/${LATEST}) for upstream changes"
+          CHANGELOG_ENTRY="## ${NEW_VERSION}\n\n- Upgrade base image to Dawarich [${LATEST}](https://github.com/Freika/dawarich/releases/tag/${LATEST})\n- See [upstream release notes](https://github.com/Freika/dawarich/releases/tag/${LATEST}) for full details\n"
           sed -i "s|^# Changelog$|# Changelog\n\n${CHANGELOG_ENTRY}|" dawarich/CHANGELOG.md
           echo "  ✓ CHANGELOG.md → new entry for ${NEW_VERSION}"
 
@@ -287,87 +143,47 @@ jobs:
           sed -i "s|^\*\*Current Dawarich version: .*|\*\*Current Dawarich version: ${LATEST}\*\* ([release notes](https://github.com/Freika/dawarich/releases/tag/${LATEST}))|" README.md
           echo "  ✓ README.md → version badge updated"
 
-      # ── Create pull request with compatibility report ──
-      - name: Create pull request
-        if: steps.versions.outputs.current != steps.versions.outputs.latest
+      # ── Commit, push to main and publish release ──
+      - name: Publish update to main
+        if: steps.versions.outputs.current != steps.versions.outputs.latest && steps.docker.outputs.missing == ''
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           LATEST: ${{ steps.versions.outputs.latest }}
           CURRENT: ${{ steps.versions.outputs.current }}
           RELEASE_NOTES: ${{ steps.release.outputs.notes }}
           RELEASE_COUNT: ${{ steps.release.outputs.count }}
-          ENVCHECK_REPORT: ${{ steps.envcheck.outputs.report }}
-          HAS_NEW_VARS: ${{ steps.envcheck.outputs.has_new }}
-          BREAKING_FOUND: ${{ steps.breaking.outputs.found }}
-          BREAKING_LINES: ${{ steps.breaking.outputs.lines }}
-          DOCKER_MISSING: ${{ steps.docker.outputs.missing }}
         run: |
-          BRANCH="auto/dawarich-${LATEST}"
+          NEW_VERSION="${LATEST}-1"
+          echo "Publishing release ${NEW_VERSION}..."
 
-          # Idempotent on weekly re-runs: if a PR for this version is already
-          # open, there is nothing to do.
-          if gh pr list --head "$BRANCH" --state open --json number -q '.[0].number' | grep -q .; then
-            echo "A pull request for ${BRANCH} is already open — nothing to do."
-            exit 0
-          fi
-
-          echo "Creating PR branch: ${BRANCH}"
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          # -B resets the branch if it lingers from an earlier interrupted run;
-          # -f overwrites any stale remote branch so the push can't fast-forward-fail.
-          git checkout -B "$BRANCH"
-          git add -A
-          git commit -m "Bump Dawarich to ${LATEST}"
-          git push -f -u origin "$BRANCH"
+          git checkout main
+          git add dawarich/build.yaml dawarich/config.yaml dawarich/CHANGELOG.md README.md
+          git commit -m "Auto-bump Dawarich to ${LATEST} (${NEW_VERSION})"
+          git push origin main
 
-          # Build compatibility section
-          COMPAT=""
+          # Create GitHub Release with upstream notes so git tag and release exist immediately
+          gh release create "$NEW_VERSION" \
+            --title "$NEW_VERSION" \
+            --target "main" \
+            --notes "$(cat <<EOF
+          ## Dawarich $LATEST (Add-on $NEW_VERSION)
 
-          if [ -n "$DOCKER_MISSING" ]; then
-            COMPAT+=$'\n'"> **Warning:** Docker image \`freikin/dawarich:${LATEST}\` is missing architectures: ${DOCKER_MISSING}. Do not merge until resolved."$'\n'
-          fi
+          Automated update: upgraded base image from **$CURRENT** to **$LATEST** ($RELEASE_COUNT release(s)).
 
-          if [ "$BREAKING_FOUND" = "true" ]; then
-            COMPAT+=$'\n'"### Possible breaking changes detected"$'\n'
-            COMPAT+=$'\n'"The following lines in the release notes may indicate breaking changes:"$'\n'
-            COMPAT+=$'\n'"\`\`\`"$'\n'"${BREAKING_LINES}"$'\n'"\`\`\`"$'\n'
-          fi
-
-          COMPAT+=$'\n'"### Environment variable check"$'\n'
-          COMPAT+=$'\n'"${ENVCHECK_REPORT}"$'\n'
-
-          # Build labels
-          LABELS=""
-          if [ "$BREAKING_FOUND" = "true" ] || [ "$HAS_NEW_VARS" = "true" ] || [ -n "$DOCKER_MISSING" ]; then
-            LABELS="--label needs-review"
-          fi
-
-          echo "Creating pull request..."
-          PR_URL=$(gh pr create \
-            --title "Bump Dawarich to ${LATEST}" \
-            $LABELS \
-            --body "$(cat <<EOF
-          ## Summary
-
-          New Dawarich release detected: **${CURRENT}** → **${LATEST}** (${RELEASE_COUNT} version(s))
-
-          ## Compatibility report
-          ${COMPAT}
-
-          ## Upstream release notes
+          Home Assistant will detect this update automatically if auto-update is enabled.
 
           <details>
-          <summary>Release notes (${RELEASE_COUNT} version(s))</summary>
+          <summary>Upstream Release Notes ($RELEASE_COUNT release(s))</summary>
 
-          ${RELEASE_NOTES}
+          $RELEASE_NOTES
 
           </details>
 
           ---
-          Full release: https://github.com/Freika/dawarich/releases/tag/${LATEST}
+          Upstream release: https://github.com/Freika/dawarich/releases/tag/$LATEST
           EOF
-          )")
+          )"
 
-          echo ""
-          echo "✅ Pull request created: ${PR_URL}"
+          echo "✅ Successfully updated to ${NEW_VERSION} and published release!"
